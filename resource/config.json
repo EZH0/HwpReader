@@ -1,0 +1,21 @@
+{
+  "table_index": "all",
+  "input_orientation": "columns",
+  "newline_replacement": " ",
+  "address_prefixes": ["경북", "경남", "경상북도", "경상남도"],
+  "address_field": "주소",
+  "fields": [
+    "index",
+    "공사명",
+    "건축주",
+    "설계회사",
+    "주소",
+    "전화번호",
+    "공사규모",
+    "진행사항",
+    "기타"
+  ],
+  "result_template": "resource/excel_example.xlsx",
+  "full_output_dir": "result/full data",
+  "sorted_output_dir": "result/sorted data"
+}

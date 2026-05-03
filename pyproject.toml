@@ -1,0 +1,11 @@
+[project]
+name = "hwpreader"
+version = "0.1.0"
+description = "Extract tables from HWP files and save them to Excel workbooks."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "openpyxl>=3.1.0",
+    "pyhwpx>=0.44.0; platform_system == 'Windows'",
+    "pywin32>=306; platform_system == 'Windows'",
+]
