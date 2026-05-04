@@ -14,8 +14,8 @@ class AppConfig:
     address_field: str
     fields: list[str]
     result_template: Path
-    full_output_dir: Path
-    sorted_output_dir: Path
+    full_output_path: Path
+    sorted_output_path: Path
 
 
 def load_config(path: Path) -> AppConfig:
@@ -32,8 +32,17 @@ def load_config(path: Path) -> AppConfig:
         address_field=str(raw.get("address_field", "주소")),
         fields=[str(item) for item in raw["fields"]],
         result_template=_resolve(base_dir, raw["result_template"]),
-        full_output_dir=_resolve(base_dir, raw["full_output_dir"]),
-        sorted_output_dir=_resolve(base_dir, raw["sorted_output_dir"]),
+        full_output_path=_resolve(
+            base_dir,
+            raw.get("full_output_path", "result/full data/full_data.xlsx"),
+        ),
+        sorted_output_path=_resolve(
+            base_dir,
+            raw.get(
+                "sorted_output_path",
+                raw.get("output_path", "result/sorted data/sorted_data.xlsx"),
+            ),
+        ),
     )
 
 

@@ -16,6 +16,6 @@
     "기타"
   ],
   "result_template": "resource/excel_example.xlsx",
-  "full_output_dir": "result/full data",
-  "sorted_output_dir": "result/sorted data"
+  "full_output_path": "result/full data/full_data.xlsx",
+  "sorted_output_path": "result/sorted data/sorted_data.xlsx"
 }

@@ -13,6 +13,9 @@ class HwpExtractionError(RuntimeError):
     pass
 
 
+MAX_CONTROL_SCAN = 200
+
+
 class HwpTableExtractor(ABC):
     name = "unknown"
 
@@ -31,7 +34,7 @@ def create_extractor(backend: str = "auto") -> HwpTableExtractor:
         raise ValueError(f"Unsupported backend: {backend}")
 
     if backend == "auto":
-        return FallbackTableExtractor([PyhwpxTableExtractor, ComTableExtractor])
+        return FallbackTableExtractor([ComTableExtractor, PyhwpxTableExtractor])
 
     if backend == "com":
         return ComTableExtractor()
@@ -135,15 +138,14 @@ class ComTableExtractor(HwpTableExtractor):
         self._win32 = win32com.client
 
     def extract_table(self, path: Path, table_index: int) -> Table:
-        hwp = self._win32.gencache.EnsureDispatch("HWPFrame.HwpObject")
-        try:
-            hwp.RegisterModule("FilePathCheckDLL", "FilePathCheckerModule")
-        except Exception:
-            pass
+        hwp = self._win32.Dispatch("HWPFrame.HwpObject")
+        _register_file_path_check_module(hwp)
         try:
             hwp.Open(str(path))
-            _move_to_table(hwp, table_index)
-            return _ensure_table(_copy_selection_as_table(hwp), path)
+            tables = _scan_tables(hwp, path, table_index)
+            if len(tables) <= table_index:
+                raise HwpExtractionError(f"Table index {table_index} was not found")
+            return tables[table_index]
         finally:
             _quit_hwp(hwp)
 
@@ -151,14 +153,14 @@ class ComTableExtractor(HwpTableExtractor):
         if table_index is not None:
             return [self.extract_table(path, table_index)]
 
-        tables: list[Table] = []
-        index = 0
-        while True:
-            try:
-                tables.append(self.extract_table(path, index))
-            except HwpExtractionError:
-                break
-            index += 1
+        hwp = self._win32.Dispatch("HWPFrame.HwpObject")
+        _register_file_path_check_module(hwp)
+        try:
+            hwp.Open(str(path))
+            tables = _scan_tables(hwp, path)
+        finally:
+            _quit_hwp(hwp)
+
         if not tables:
             raise HwpExtractionError(f"No tables were found in {path.name}")
         return tables
@@ -172,6 +174,41 @@ def _move_to_table(hwp: object, table_index: int) -> None:
     _run_action(hwp, "TableCellBlock")
     _run_action(hwp, "TableCellBlockExtend")
     _run_action(hwp, "TableCellBlockExtendAbs")
+
+
+def _register_file_path_check_module(hwp: object) -> None:
+    for module_name in (
+        "FilePathCheckerModuleExample",
+        "SecurityModule",
+        "FilePathCheckerModule",
+    ):
+        try:
+            if getattr(hwp, "RegisterModule")("FilePathCheckDLL", module_name):
+                return
+        except Exception:
+            pass
+
+
+def _scan_tables(
+    hwp: object,
+    path: Path,
+    table_index: int | None = None,
+) -> list[Table]:
+    tables: list[Table] = []
+    for _ in range(MAX_CONTROL_SCAN):
+        if not _run_action(hwp, "MoveSelNextCtrl"):
+            break
+
+        _run_action(hwp, "TableCellBlock")
+        _run_action(hwp, "TableCellBlockExtend")
+        _run_action(hwp, "TableCellBlockExtendAbs")
+
+        with contextlib.suppress(HwpExtractionError):
+            table = _ensure_table(_copy_selection_as_table(hwp), path)
+            tables.append(table)
+            if table_index is not None and len(tables) > table_index:
+                break
+    return tables
 
 
 def _copy_selection_as_table(hwp: object) -> Table:

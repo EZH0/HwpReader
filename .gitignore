@@ -11,8 +11,14 @@ wheels/
 
 # Local input documents and generated workbooks
 data/*
-result/full data/
-result/sorted data/
+!data/.gitkeep
+result/full data/*
+!result/
+!result/full data/
+!result/full data/.gitkeep
+result/sorted data/*
+!result/sorted data/
+!result/sorted data/.gitkeep
 result/_write_check/
 result/tmp*/
 result/*.xlsx
