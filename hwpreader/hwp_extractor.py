@@ -46,12 +46,13 @@ class FallbackTableExtractor(HwpTableExtractor):
 
     def __init__(self, extractor_classes: list[type[HwpTableExtractor]]) -> None:
         self._extractor_classes = extractor_classes
+        self._extractors: dict[type[HwpTableExtractor], HwpTableExtractor] = {}
 
     def extract_table(self, path: Path, table_index: int) -> Table:
         errors: list[str] = []
         for extractor_class in self._extractor_classes:
             try:
-                extractor = extractor_class()
+                extractor = self._get_extractor(extractor_class)
                 return extractor.extract_table(path, table_index)
             except Exception as exc:
                 errors.append(f"{extractor_class.name}: {exc}")
@@ -62,12 +63,26 @@ class FallbackTableExtractor(HwpTableExtractor):
         errors: list[str] = []
         for extractor_class in self._extractor_classes:
             try:
-                extractor = extractor_class()
+                extractor = self._get_extractor(extractor_class)
                 return extractor.extract_tables(path, table_index)
             except Exception as exc:
                 errors.append(f"{extractor_class.name}: {exc}")
         detail = "; ".join(errors) if errors else "no backend tried"
         raise HwpExtractionError(f"Could not extract tables from {path.name}. {detail}")
+
+    def close(self) -> None:
+        for extractor in self._extractors.values():
+            close = getattr(extractor, "close", None)
+            if callable(close):
+                close()
+
+    def _get_extractor(
+        self,
+        extractor_class: type[HwpTableExtractor],
+    ) -> HwpTableExtractor:
+        if extractor_class not in self._extractors:
+            self._extractors[extractor_class] = extractor_class()
+        return self._extractors[extractor_class]
 
 
 class PyhwpxTableExtractor(HwpTableExtractor):
@@ -136,34 +151,46 @@ class ComTableExtractor(HwpTableExtractor):
         except Exception as exc:
             raise HwpExtractionError("pywin32 is not installed") from exc
         self._win32 = win32com.client
+        self._hwp: object | None = None
 
     def extract_table(self, path: Path, table_index: int) -> Table:
-        hwp = self._win32.Dispatch("HWPFrame.HwpObject")
+        hwp = self._get_hwp()
         _register_file_path_check_module(hwp)
+        hwp.Open(str(path))
         try:
-            hwp.Open(str(path))
             tables = _scan_tables(hwp, path, table_index)
-            if len(tables) <= table_index:
-                raise HwpExtractionError(f"Table index {table_index} was not found")
-            return tables[table_index]
         finally:
-            _quit_hwp(hwp)
+            _close_document(hwp)
+        if len(tables) <= table_index:
+            raise HwpExtractionError(f"Table index {table_index} was not found")
+        return tables[table_index]
 
     def extract_tables(self, path: Path, table_index: int | None) -> list[Table]:
         if table_index is not None:
             return [self.extract_table(path, table_index)]
 
-        hwp = self._win32.Dispatch("HWPFrame.HwpObject")
+        hwp = self._get_hwp()
         _register_file_path_check_module(hwp)
+        hwp.Open(str(path))
         try:
-            hwp.Open(str(path))
             tables = _scan_tables(hwp, path)
         finally:
-            _quit_hwp(hwp)
+            _close_document(hwp)
 
         if not tables:
             raise HwpExtractionError(f"No tables were found in {path.name}")
         return tables
+
+    def close(self) -> None:
+        if self._hwp is not None:
+            _quit_hwp(self._hwp)
+            self._hwp = None
+
+    def _get_hwp(self) -> object:
+        if self._hwp is None:
+            self._hwp = self._win32.DispatchEx("HWPFrame.HwpObject")
+            _register_file_path_check_module(self._hwp)
+        return self._hwp
 
 
 def _move_to_table(hwp: object, table_index: int) -> None:
@@ -178,15 +205,27 @@ def _move_to_table(hwp: object, table_index: int) -> None:
 
 def _register_file_path_check_module(hwp: object) -> None:
     for module_name in (
+        "FilePathCheckerModule",
         "FilePathCheckerModuleExample",
         "SecurityModule",
-        "FilePathCheckerModule",
     ):
         try:
             if getattr(hwp, "RegisterModule")("FilePathCheckDLL", module_name):
                 return
         except Exception:
             pass
+
+
+def _close_document(hwp: object) -> None:
+    for method_name in ("FileClose", "Clear", "clear", "close", "Close"):
+        method = getattr(hwp, method_name, None)
+        if callable(method):
+            try:
+                with _suppress_output():
+                    method()
+                return
+            except Exception:
+                pass
 
 
 def _scan_tables(
@@ -285,11 +324,4 @@ def _run_action(hwp: object, action_name: str) -> bool:
 
 
 def _quit_hwp(hwp: object) -> None:
-    for method_name in ("FileClose", "Clear", "clear", "quit", "Quit", "FileQuit", "close", "Close"):
-        method = getattr(hwp, method_name, None)
-        if callable(method):
-            try:
-                with _suppress_output():
-                    method()
-            except Exception:
-                pass
+    _close_document(hwp)

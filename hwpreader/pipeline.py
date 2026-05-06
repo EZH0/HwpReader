@@ -37,42 +37,47 @@ def run_pipeline(
         return 0
     print(f"processing {len(pending_files)} new or changed files.")
 
-    records, failed_files = extract_records(pending_files, config, extractor)
+    try:
+        records, failed_files = extract_records(pending_files, config, extractor)
 
-    print(f"extracted {len(records)} records from {len(pending_files)} files.")
-    if not records:
-        print("no records extracted; output files were not created.", file=sys.stderr)
-        return 4
+        print(f"extracted {len(records)} records from {len(pending_files)} files.")
+        if not records:
+            print("no records extracted; output files were not created.", file=sys.stderr)
+            return 4
 
-    if dry_run:
-        print_preview(records)
+        if dry_run:
+            print_preview(records)
+            return 0
+
+        print("saving excel files...")
+        successful_files = [
+            hwp_file for hwp_file in pending_files if hwp_file.name not in failed_files
+        ]
+        full_output_path = save_outputs(
+            records=records,
+            fields=config.fields,
+            template_path=config.result_template,
+            output_path=config.full_output_path,
+            updated_files=successful_files,
+        )
+        sorted_output_path = save_outputs(
+            records=records,
+            fields=config.fields,
+            template_path=config.result_template,
+            output_path=config.sorted_output_path,
+            updated_files=successful_files,
+            address_prefixes=config.address_prefixes,
+            address_field=config.address_field,
+        )
+        print(f"saved full weekly workbook: {full_output_path}")
+        print(f"saved sorted weekly workbook: {sorted_output_path}")
+        if failed_files:
+            print(f"skipped {len(failed_files)} files: {', '.join(sorted(failed_files))}")
         return 0
-
-    print("saving excel files...")
-    successful_files = [
-        hwp_file for hwp_file in pending_files if hwp_file.name not in failed_files
-    ]
-    full_output_path = save_outputs(
-        records=records,
-        fields=config.fields,
-        template_path=config.result_template,
-        output_path=config.full_output_path,
-        updated_files=successful_files,
-    )
-    sorted_output_path = save_outputs(
-        records=records,
-        fields=config.fields,
-        template_path=config.result_template,
-        output_path=config.sorted_output_path,
-        updated_files=successful_files,
-        address_prefixes=config.address_prefixes,
-        address_field=config.address_field,
-    )
-    print(f"saved full weekly workbook: {full_output_path}")
-    print(f"saved sorted weekly workbook: {sorted_output_path}")
-    if failed_files:
-        print(f"skipped {len(failed_files)} files: {', '.join(sorted(failed_files))}")
-    return 0
+    finally:
+        close = getattr(extractor, "close", None)
+        if callable(close):
+            close()
 
 
 def discover_hwp_files(data_dir: Path) -> list[Path]:
