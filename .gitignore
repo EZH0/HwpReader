@@ -5,6 +5,8 @@ build/
 dist/
 wheels/
 *.egg-info
+*.spec
+HwpReader.exe
 
 # Virtual environments
 .venv

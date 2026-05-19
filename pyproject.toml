@@ -9,3 +9,8 @@ dependencies = [
     "pyhwpx>=0.44.0; platform_system == 'Windows'",
     "pywin32>=306; platform_system == 'Windows'",
 ]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.20.0",
+]
