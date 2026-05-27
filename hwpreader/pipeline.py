@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 from .config import AppConfig
-from .excel_writer import get_processed_sources, save_outputs
+from .excel_writer import get_processed_sources, load_records, save_outputs
 from .hwp_extractor import HwpExtractionError, create_extractor
 from .models import ExtractedRecord
 from .transform import table_to_records
@@ -24,18 +24,20 @@ def run_pipeline(
         print("data folder has no YYYYMMDD.hwp files.")
         return 0
 
+    processed_sources = get_processed_sources(config.full_output_path)
+    pending_files = filter_pending_files(hwp_files, processed_sources)
+    if not pending_files:
+        if rebuild_sorted_output(config, hwp_files):
+            return 0
+        print("no new or changed YYYYMMDD.hwp files.")
+        return 0
+    print(f"processing {len(pending_files)} new or changed files.")
+
     try:
         extractor = create_extractor(backend)
     except HwpExtractionError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-
-    processed_sources = get_processed_sources(config.full_output_path)
-    pending_files = filter_pending_files(hwp_files, processed_sources)
-    if not pending_files:
-        print("no new or changed YYYYMMDD.hwp files.")
-        return 0
-    print(f"processing {len(pending_files)} new or changed files.")
 
     try:
         records, failed_files = extract_records(pending_files, config, extractor)
@@ -82,6 +84,39 @@ def run_pipeline(
 
 def discover_hwp_files(data_dir: Path) -> list[Path]:
     return sorted(data_dir.glob(DATE_NAME_PATTERN))
+
+
+def rebuild_sorted_output(config: AppConfig, hwp_files: list[Path]) -> bool:
+    if not config.full_output_path.exists():
+        return False
+    if (
+        config.sorted_output_path.exists()
+        and config.sorted_output_path.stat().st_mtime_ns
+        >= config.full_output_path.stat().st_mtime_ns
+    ):
+        return False
+
+    records = load_records(config.full_output_path, config.fields)
+    if not records:
+        return False
+
+    print("rebuilding sorted workbook from stored full data...")
+    record_source_names = {record.source_file.name for record in records}
+    source_files = [
+        hwp_file for hwp_file in hwp_files if hwp_file.name in record_source_names
+    ]
+    sorted_output_path = save_outputs(
+        records=records,
+        fields=config.fields,
+        template_path=config.result_template,
+        output_path=config.sorted_output_path,
+        updated_files=source_files,
+        address_prefixes=config.address_prefixes,
+        address_field=config.address_field,
+        replace_existing=True,
+    )
+    print(f"saved sorted weekly workbook: {sorted_output_path}")
+    return True
 
 
 def source_signature(path: Path) -> str:

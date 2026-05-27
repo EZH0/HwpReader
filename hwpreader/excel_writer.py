@@ -17,13 +17,19 @@ RECORDS_SHEET = "__records"
 MANIFEST_SHEET = "__processed_sources"
 EMPTY_SHEET = "정리본"
 INVALID_SHEET_CHARS = re.compile(r"[\[\]:*?/\\]")
+WEEK_SHEET_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}~\d{2}-\d{2}$")
 
 
 def get_processed_sources(output_path: Path) -> dict[str, str]:
     if not output_path.exists():
         return {}
 
-    workbook = load_workbook(output_path, read_only=True, data_only=True)
+    workbook = load_workbook(
+        output_path,
+        read_only=True,
+        data_only=True,
+        keep_vba=_keeps_vba(output_path),
+    )
     try:
         if MANIFEST_SHEET not in workbook.sheetnames:
             return {}
@@ -38,6 +44,22 @@ def get_processed_sources(output_path: Path) -> dict[str, str]:
         workbook.close()
 
 
+def load_records(output_path: Path, fields: list[str]) -> list[ExtractedRecord]:
+    if not output_path.exists():
+        return []
+
+    workbook = load_workbook(
+        output_path,
+        read_only=True,
+        data_only=True,
+        keep_vba=_keeps_vba(output_path),
+    )
+    try:
+        return _load_stored_records(workbook, fields)
+    finally:
+        workbook.close()
+
+
 def save_outputs(
     records: list[ExtractedRecord],
     fields: list[str],
@@ -45,17 +67,20 @@ def save_outputs(
     output_path: Path,
     updated_files: list[Path],
     address_prefixes: list[str] | None = None,
+    replace_existing: bool = False,
     address_field: str = "주소",
 ) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = _load_workbook(output_path, template_path)
     updated_names = {path.name for path in updated_files}
 
-    kept_records = [
-        record
-        for record in _load_stored_records(workbook, fields)
-        if record.source_file.name not in updated_names
-    ]
+    kept_records = []
+    if not replace_existing:
+        kept_records = [
+            record
+            for record in _load_stored_records(workbook, fields)
+            if record.source_file.name not in updated_names
+        ]
     new_records = _filter_records(records, address_field, address_prefixes)
     stored_records = kept_records + new_records
 
@@ -68,17 +93,21 @@ def save_outputs(
 
 def _load_workbook(output_path: Path, template_path: Path) -> Workbook:
     if output_path.exists():
-        return load_workbook(output_path)
+        return load_workbook(output_path, keep_vba=_keeps_vba(output_path))
 
     if template_path.exists():
         temp_path = template_path.parent / f".tmp_{template_path.name}"
         shutil.copy2(template_path, temp_path)
         try:
-            return load_workbook(temp_path)
+            return load_workbook(temp_path, keep_vba=_keeps_vba(template_path))
         finally:
             temp_path.unlink(missing_ok=True)
 
     return Workbook()
+
+
+def _keeps_vba(path: Path) -> bool:
+    return path.suffix.lower() == ".xlsm"
 
 
 def _load_stored_records(workbook: Workbook, fields: list[str]) -> list[ExtractedRecord]:
@@ -150,22 +179,34 @@ def _rewrite_weekly_sheets(
     records: list[ExtractedRecord],
     fields: list[str],
 ) -> None:
-    _remove_visible_sheets(workbook)
+    widths = _generated_sheet_widths(workbook)
+    _remove_generated_sheets(workbook)
     grouped = _group_records_by_week(records)
 
     if not grouped:
         sheet = workbook.create_sheet(EMPTY_SHEET)
-        _rewrite_summary_sheet(sheet, [], fields)
+        _rewrite_summary_sheet(sheet, [], fields, widths)
         return
 
     for week_start, week_records in sorted(grouped.items()):
         sheet = workbook.create_sheet(_week_sheet_name(week_start))
-        _rewrite_summary_sheet(sheet, week_records, fields)
+        _rewrite_summary_sheet(sheet, week_records, fields, widths)
 
 
-def _remove_visible_sheets(workbook: Workbook) -> None:
+def _generated_sheet_widths(workbook: Workbook) -> dict[str, float]:
+    for sheet in workbook.worksheets:
+        if WEEK_SHEET_PATTERN.match(sheet.title):
+            return {
+                column_letter: dimension.width
+                for column_letter, dimension in sheet.column_dimensions.items()
+                if dimension.width is not None
+            }
+    return {}
+
+
+def _remove_generated_sheets(workbook: Workbook) -> None:
     for sheet in list(workbook.worksheets):
-        if sheet.title not in {RECORDS_SHEET, MANIFEST_SHEET}:
+        if sheet.title == EMPTY_SHEET or WEEK_SHEET_PATTERN.match(sheet.title):
             workbook.remove(sheet)
 
 
@@ -217,6 +258,7 @@ def _rewrite_summary_sheet(
     sheet: Worksheet,
     records: list[ExtractedRecord],
     fields: list[str],
+    widths: dict[str, float] | None = None,
 ) -> None:
     _clear_sheet(sheet)
     headers = fields + ["source_file"]
@@ -224,7 +266,10 @@ def _rewrite_summary_sheet(
     for record in records:
         sheet.append([record.values.get(field, "") for field in fields] + [record.source_file.name])
     _style_header(sheet)
-    _set_widths(sheet, headers)
+    if widths:
+        _apply_widths(sheet, widths)
+    else:
+        _set_widths(sheet, headers)
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
 
@@ -254,6 +299,11 @@ def _set_widths(sheet: Worksheet, headers: list[str]) -> None:
             value = sheet.cell(row=row_idx, column=col_idx).value
             max_len = max(max_len, len(str(value or "")))
         sheet.column_dimensions[sheet.cell(row=1, column=col_idx).column_letter].width = min(max(max_len + 2, 10), 42)
+
+
+def _apply_widths(sheet: Worksheet, widths: dict[str, float]) -> None:
+    for column_letter, width in widths.items():
+        sheet.column_dimensions[column_letter].width = width
 
 
 def _source_signature(path: Path) -> str:

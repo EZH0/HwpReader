@@ -9,7 +9,7 @@
 - HWP 표의 열을 하나의 공사 레코드로 보고, 엑셀의 행 구조로 변환합니다.
 - 줄바꿈은 설정값(`newline_replacement`)으로 정리합니다.
 - 전체 결과를 `result/full data/full_data.xlsx` 하나에 저장합니다.
-- 주소가 지정 지역명으로 시작하는 결과를 `result/sorted data/sorted_data.xlsx` 하나에 저장합니다.
+- 주소가 지정 지역명으로 시작하는 결과를 `result/sorted data/sorted_data.xlsm` 하나에 저장합니다.
 - 결과 엑셀은 HWP 파일명 날짜를 기준으로 월~금 주간 시트를 나눠 갱신합니다.
 - 이미 처리한 HWP 파일은 다시 읽지 않고, 새 파일이나 수정된 파일만 읽습니다.
 

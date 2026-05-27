@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import contextlib
+import ctypes
 import io
 from pathlib import Path
+import subprocess
+import time
 from typing import Iterator
 
 from .models import Table
@@ -147,11 +150,14 @@ class ComTableExtractor(HwpTableExtractor):
 
     def __init__(self) -> None:
         try:
-            import win32com.client  # type: ignore
+            import pythoncom  # type: ignore
+            from win32com.client import dynamic  # type: ignore
         except Exception as exc:
             raise HwpExtractionError("pywin32 is not installed") from exc
-        self._win32 = win32com.client
+        self._pythoncom = pythoncom
+        self._dynamic = dynamic
         self._hwp: object | None = None
+        self._owned_pids: set[int] = set()
 
     def extract_table(self, path: Path, table_index: int) -> Table:
         hwp = self._get_hwp()
@@ -183,14 +189,30 @@ class ComTableExtractor(HwpTableExtractor):
 
     def close(self) -> None:
         if self._hwp is not None:
-            _quit_hwp(self._hwp)
+            _quit_hwp(self._hwp, self._owned_pids)
             self._hwp = None
+            self._owned_pids = set()
 
     def _get_hwp(self) -> object:
         if self._hwp is None:
-            self._hwp = self._win32.DispatchEx("HWPFrame.HwpObject")
+            before_pids = _hwp_process_ids()
+            self._hwp = self._create_hwp_object()
+            self._owned_pids = _hwp_process_ids() - before_pids
+            window_pid = _hwp_window_process_id(self._hwp)
+            if window_pid is not None and window_pid not in before_pids:
+                self._owned_pids.add(window_pid)
             _register_file_path_check_module(self._hwp)
         return self._hwp
+
+    def _create_hwp_object(self) -> object:
+        clsid = self._pythoncom.CLSIDFromProgID("HWPFrame.HwpObject")
+        dispatch = self._pythoncom.CoCreateInstance(
+            clsid,
+            None,
+            self._pythoncom.CLSCTX_LOCAL_SERVER,
+            self._pythoncom.IID_IDispatch,
+        )
+        return self._dynamic.Dispatch(dispatch)
 
 
 def _move_to_table(hwp: object, table_index: int) -> None:
@@ -323,5 +345,88 @@ def _run_action(hwp: object, action_name: str) -> bool:
         return False
 
 
-def _quit_hwp(hwp: object) -> None:
+def _quit_hwp(hwp: object, owned_pids: set[int] | None = None) -> None:
     _close_document(hwp)
+    if not owned_pids:
+        return
+
+    for method_name in ("Quit", "quit", "FileQuit"):
+        method = getattr(hwp, method_name, None)
+        if callable(method):
+            try:
+                with _suppress_output():
+                    method()
+                break
+            except Exception:
+                pass
+
+    _terminate_owned_hwp_processes(owned_pids)
+
+
+def _hwp_process_ids() -> set[int]:
+    try:
+        result = subprocess.run(
+            [
+                "tasklist",
+                "/FI",
+                "IMAGENAME eq hwp.exe",
+                "/FO",
+                "CSV",
+                "/NH",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except Exception:
+        return set()
+
+    process_ids: set[int] = set()
+    for line in result.stdout.splitlines():
+        parts = [part.strip().strip('"') for part in line.split('","')]
+        if len(parts) >= 2 and parts[0].lower() == "hwp.exe":
+            with contextlib.suppress(ValueError):
+                process_ids.add(int(parts[1]))
+    return process_ids
+
+
+def _hwp_window_process_id(hwp: object) -> int | None:
+    try:
+        windows = getattr(hwp, "XHwpWindows")
+        window = windows.Item(0)
+    except Exception:
+        return None
+
+    hwnd = None
+    for attr_name in ("HWND", "Hwnd", "hwnd"):
+        with contextlib.suppress(Exception):
+            hwnd = int(getattr(window, attr_name))
+            break
+    if not hwnd:
+        return None
+
+    pid = ctypes.c_ulong()
+    ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return int(pid.value) if pid.value else None
+
+
+def _terminate_owned_hwp_processes(owned_pids: set[int]) -> None:
+    if not owned_pids:
+        return
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if not (owned_pids & _hwp_process_ids()):
+            return
+        time.sleep(0.2)
+
+    for pid in sorted(owned_pids & _hwp_process_ids()):
+        with contextlib.suppress(Exception):
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )

@@ -40,7 +40,7 @@ def load_config(path: Path) -> AppConfig:
             base_dir,
             raw.get(
                 "sorted_output_path",
-                raw.get("output_path", "result/sorted data/sorted_data.xlsx"),
+                raw.get("output_path", "result/sorted data/sorted_data.xlsm"),
             ),
         ),
     )

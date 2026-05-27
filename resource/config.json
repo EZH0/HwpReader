@@ -17,5 +17,5 @@
   ],
   "result_template": "resource/excel_example.xlsx",
   "full_output_path": "result/full data/full_data.xlsx",
-  "sorted_output_path": "result/sorted data/sorted_data.xlsx"
+  "sorted_output_path": "result/sorted data/sorted_data.xlsm"
 }
